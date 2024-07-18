@@ -3,6 +3,9 @@
 #include <QMC5883LCompass.h>
 QMC5883LCompass compass;
 
+const int raspiPin1 = 16;
+const int raspiPin2 = 3;
+
 // Magnetometer
 int initialGroup = -1;
 int currentGroup = 0;
@@ -30,15 +33,17 @@ const int resolution = 8;
 #define MLeft1 27
 #define MLeft2 26
 #define M2LeftCycle 14
-#define dutyCycle 255
+int dutyCycle = 255;
 
 //Ultrasonic
 #define US1_ECHO 15
 #define US1_TRIGGER 2
-#define US2_TRIGGER 16
+
+#define US2_TRIGGER 5
 #define US2_ECHO 4
-#define US3_TRIGGER 5
-#define US3_ECHO 17
+
+#define US3_TRIGGER 19
+#define US3_ECHO 18
 
 // Ultrasonic Sensor Instances
 NewPing sonar1(US1_TRIGGER, US1_ECHO);
@@ -50,6 +55,10 @@ int jarakKanan, jarakDepan, jarakKiri;
 
 void setup() {
   Serial.begin(115200);
+
+  //Raspberry Data
+  pinMode(raspiPin1, INPUT);
+  pinMode(raspiPin2, INPUT);
 
   // Magnetometer
   Wire.begin(21, 22);
@@ -66,9 +75,11 @@ void setup() {
   pinMode(MRight2, OUTPUT);
   pinMode(M2RightCycle, OUTPUT);
 
-  // PWM Setup
-  ledcAttachChannel(M2LeftCycle, freq, resolution, pwmChannelLeft);
-  ledcAttachChannel(M2RightCycle, freq, resolution, pwmChannelRight);
+  ledcSetup(pwmChannelLeft, freq, resolution);
+  ledcSetup(pwmChannelRight, freq, resolution);
+  ledcAttachPin(M2LeftCycle, pwmChannelLeft);
+  ledcAttachPin(M2RightCycle, pwmChannelRight);
+
   delay(500);
 }
 
@@ -93,6 +104,13 @@ void loop() {
   jarakKiri = sonar3.ping_cm();
   delay(50);
 
+  // Serial.print("Jarak Kanan: ");
+  // Serial.println(jarakKanan);
+  // Serial.print("Jarak Depan: ");
+  // Serial.println(jarakDepan);
+  // Serial.print("Jarak Kiri: ");
+  // Serial.println(jarakKiri);
+
   // INPUT FUZZY
   if (sensorSide == 0) {
     g_fisInput[0] = jarakKanan;
@@ -104,8 +122,16 @@ void loop() {
   g_fisOutput[0] = 0;
   g_fisOutput[1] = 0;
 
-  if (jarakDepan <= 10) {
+  int raspi1 = digitalRead(raspiPin1);
+  int raspi2 = digitalRead(raspiPin2);
+
+  if (raspi1 == HIGH) {
     moveStop();
+    Serial.println("Mendeteksi Hama..");
+    delay(6000);
+  } else if (jarakDepan <= 10) {
+    moveStop();
+    Serial.println("Berhenti.");
   } else {
     fis_evaluate();
     int leftCycle = dutyCycle;
@@ -119,16 +145,20 @@ void loop() {
       leftCycle = constrain((dutyCycle * g_fisOutput[1]), 0, 255);
       rightCycle = constrain((dutyCycle * g_fisOutput[0]), 0, 255);
     }
+
     moveForward();
     ledcWrite(pwmChannelLeft, leftCycle);
     ledcWrite(pwmChannelRight, rightCycle);
 
-    // Serial.print("Jarak Kanan: ");
-    // Serial.println(jarakKanan);
-    // Serial.print("Input Motor Kiri: ");
-    // Serial.println(leftCycle);
-    // Serial.print("Input Motor Kanan: ");
-    // Serial.println(rightCycle);
+    Serial.print("Jarak Kanan: ");
+    Serial.println(jarakKanan);
+    Serial.print("Jarak Kiri: ");
+    Serial.println(jarakKiri);
+    Serial.print("Input Motor Kiri: ");
+    Serial.println(leftCycle);
+    Serial.print("Input Motor Kanan: ");
+    Serial.println(rightCycle);
+    Serial.println();
   }
 }
 
