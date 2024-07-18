@@ -128,7 +128,7 @@ void loop() {
   if (raspi1 == HIGH) {
     moveStop();
     Serial.println("Mendeteksi Hama..");
-    delay(6000);
+    delay(4000);
   } else if (jarakDepan <= 10) {
     moveStop();
     Serial.println("Berhenti.");
