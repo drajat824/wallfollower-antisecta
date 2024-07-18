@@ -57,8 +57,8 @@ void setup() {
   Serial.begin(115200);
 
   //Raspberry Data
-  pinMode(raspiPin1, INPUT);
-  pinMode(raspiPin2, INPUT);
+  pinMode(raspiPin1, INPUT_PULLDOWN);
+  pinMode(raspiPin2, INPUT_PULLDOWN);
 
   // Magnetometer
   Wire.begin(21, 22);
