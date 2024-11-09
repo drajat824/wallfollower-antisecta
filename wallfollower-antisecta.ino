@@ -1,10 +1,24 @@
 #include "fis_header.h"
 #include <NewPing.h>
-#include <QMC5883LCompass.h>
-QMC5883LCompass compass;
+#include <MechaQMC5883.h>
 
-const int raspiPin1 = 16;
-const int raspiPin2 = 3;
+// QMC MAGNETOMETER
+
+MechaQMC5883 qmc;
+// Nilai maksimum dan minimum dari hasil kalibrasi
+int x_max = -1415, x_min = -3491;
+int y_max = 97, y_min = -1747;
+int z_max = 10, z_min = -2216;
+// Hitung offset
+int x_offset = (x_max + x_min) / 2;
+int y_offset = (y_max + y_min) / 2;
+int z_offset = (z_max + z_min) / 2;
+// Hitung skala
+float x_scale = 2.0 / (x_max - x_min);
+float y_scale = 2.0 / (y_max - y_min);
+float z_scale = 2.0 / (z_max - z_min);
+
+#define raspiPin 34
 
 // Magnetometer
 int initialGroup = -1;
@@ -27,13 +41,14 @@ const int pwmChannelRight = 1;
 const int resolution = 8;
 
 // Motor Pin Definitions
-#define MRight1 13
-#define MRight2 12
 #define M2RightCycle 25
+#define MRight1 12
+#define MRight2 14
 #define MLeft1 27
 #define MLeft2 26
-#define M2LeftCycle 14
-int dutyCycle = 255;
+#define M2LeftCycle 13
+int leftCycle = 255;
+int rightCycle = 255;
 
 //Ultrasonic
 #define US1_ECHO 15
@@ -53,19 +68,20 @@ NewPing sonar3(US3_TRIGGER, US3_ECHO);
 // Distance Variables
 int jarakKanan, jarakDepan, jarakKiri;
 
+// Variabel untuk jeda waktu
+unsigned long previousMillis = 0;
+const long interval = 2000;  // Jeda 5 detik
+
 void setup() {
   Serial.begin(115200);
+  // Serial2.begin(9600);
 
   //Raspberry Data
-  pinMode(raspiPin1, INPUT_PULLDOWN);
-  pinMode(raspiPin2, INPUT_PULLDOWN);
+  pinMode(raspiPin, INPUT_PULLDOWN);
 
   // Magnetometer
-  Wire.begin(21, 22);
-  compass.setADDR(0x0D);
-  compass.init();
-  compass.setCalibrationOffsets(-765.00, 1319.00, -2746.00);
-  compass.setCalibrationScales(1.48, 1.33, 0.64);
+  Wire.begin();
+  qmc.init();
 
   // Motor Pin Configuration
   pinMode(MLeft1, OUTPUT);
@@ -86,30 +102,49 @@ void setup() {
 void loop() {
 
   // MAGNETOMETER
-  compass.read();
-  int azimuth = compass.getAzimuth();
-  int bearing = compass.getBearing(azimuth) + 1;
+  int x, y, z;
+  float azimuth;
+  int bearing;
+  qmc.read(&x, &y, &z);
+  float x_comp = (x - x_offset) * x_scale;
+  float y_comp = (y - y_offset) * y_scale;
+  azimuth = atan2(y_comp, x_comp) * 180.0 / PI;
+  if (azimuth < 0) {
+    azimuth += 360.0;
+  }
+  bearing = (int)((azimuth + 11.25) / 22.5);
+  if (bearing == 0) {
+    bearing = 16;
+  }
   int currentGroup = getAzimuthGroup(bearing);
   if (initialGroup == -1) {
     initialGroup = currentGroup;
   }
+  unsigned long currentMillis = millis();
   if (isOppositeGroup(initialGroup, currentGroup)) {
-    toggleSensorSide();
-    initialGroup = currentGroup;
+    if (currentMillis - previousMillis >= interval) {
+      toggleSensorSide();
+      initialGroup = currentGroup;
+      previousMillis = currentMillis;
+    }
   }
+  
+  int jKn = sonar1.ping_median();
+  int jD = sonar2.ping_median();
+  int jKr = sonar3.ping_median();
 
-  // ULTRASONIC
-  jarakKanan = sonar1.ping_cm();
-  jarakDepan = sonar2.ping_cm();
-  jarakKiri = sonar3.ping_cm();
+  jarakKanan = sonar1.convert_cm(jKn);
+  jarakDepan = sonar2.convert_cm(jD);
+  jarakKiri = sonar3.convert_cm(jKr);
   delay(50);
 
-  // Serial.print("Jarak Kanan: ");
-  // Serial.println(jarakKanan);
-  // Serial.print("Jarak Depan: ");
-  // Serial.println(jarakDepan);
-  // Serial.print("Jarak Kiri: ");
-  // Serial.println(jarakKiri);
+  Serial.print("Jarak Kanan: ");
+  Serial.println(jarakKanan);
+  Serial.print("Jarak Depan: ");
+  Serial.println(jarakDepan);
+  Serial.print("Jarak Kiri: ");
+  Serial.println(jarakKiri);
+  Serial.println();
 
   // INPUT FUZZY
   if (sensorSide == 0) {
@@ -122,10 +157,11 @@ void loop() {
   g_fisOutput[0] = 0;
   g_fisOutput[1] = 0;
 
-  int raspi1 = digitalRead(raspiPin1);
-  int raspi2 = digitalRead(raspiPin2);
+  // CEK RASPBERRY
+  int raspi = 0;
+  raspi = digitalRead(raspiPin);
 
-  if (raspi1 == HIGH) {
+  if (raspi) {
     moveStop();
     Serial.println("Mendeteksi Hama..");
     delay(4000);
@@ -134,30 +170,25 @@ void loop() {
     Serial.println("Berhenti.");
   } else {
     fis_evaluate();
-    int leftCycle = dutyCycle;
-    int rightCycle = dutyCycle;
+
     if (sensorSide == 0) {
       // Sensor Kiri
-      leftCycle = constrain((dutyCycle * g_fisOutput[0]), 0, 255);
-      rightCycle = constrain((dutyCycle * g_fisOutput[1]), 0, 255);
+      leftCycle = constrain((255 * g_fisOutput[0]), 0, 255);
+      rightCycle = constrain((255 * g_fisOutput[1]), 0, 255);
     } else {
       // Sensor Kanan
-      leftCycle = constrain((dutyCycle * g_fisOutput[1]), 0, 255);
-      rightCycle = constrain((dutyCycle * g_fisOutput[0]), 0, 255);
+      leftCycle = constrain((255 * g_fisOutput[1]), 0, 255);
+      rightCycle = constrain((255 * g_fisOutput[0]), 0, 255);
     }
 
     moveForward();
     ledcWrite(pwmChannelLeft, leftCycle);
     ledcWrite(pwmChannelRight, rightCycle);
 
-    Serial.print("Jarak Kanan: ");
-    Serial.println(jarakKanan);
-    Serial.print("Jarak Kiri: ");
-    Serial.println(jarakKiri);
-    Serial.print("Input Motor Kiri: ");
-    Serial.println(leftCycle);
-    Serial.print("Input Motor Kanan: ");
+    Serial.print("Kecepatan Kanan: ");
     Serial.println(rightCycle);
+    Serial.print("Kecepatan Kiri: ");
+    Serial.println(leftCycle);
     Serial.println();
   }
 }
@@ -195,11 +226,13 @@ void moveForward() {
 }
 
 void moveStop() {
-  digitalWrite(MLeft1, HIGH);
+  digitalWrite(MLeft1, LOW);
   digitalWrite(MLeft2, LOW);
-  digitalWrite(MRight1, HIGH);
+  digitalWrite(MRight1, LOW);
   digitalWrite(MRight2, LOW);
 }
+
+// Fuyzz MATLAB
 
 FIS_TYPE fis_trapmf(FIS_TYPE x, FIS_TYPE* p) {
   FIS_TYPE a = p[0], b = p[1], c = p[2], d = p[3];
@@ -232,9 +265,9 @@ FIS_TYPE fis_array_operation(FIS_TYPE* array, int size, _FIS_ARR_OP pfnOp) {
 }
 
 
-//***********************************************************************
+//*************************
 // Data for Fuzzy Inference System
-//***********************************************************************
+//*************************
 // Pointers to the implementations of member functions
 _FIS_MF fis_gMF[] = {
   fis_trapmf
@@ -247,10 +280,10 @@ int fis_gIMFCount[] = { 4 };
 int fis_gOMFCount[] = { 2, 2 };
 
 // Coefficients for the Input Member Functions
-FIS_TYPE fis_gMFI0Coeff1[] = { -9999999, 0, 10, 20 };
-FIS_TYPE fis_gMFI0Coeff2[] = { 10, 20, 20, 30 };
-FIS_TYPE fis_gMFI0Coeff3[] = { 20, 30, 40, 45 };
-FIS_TYPE fis_gMFI0Coeff4[] = { 40, 50, 60, 10000000 };
+FIS_TYPE fis_gMFI0Coeff1[] = { 0, 0, 20, 30 };
+FIS_TYPE fis_gMFI0Coeff2[] = { 20, 30, 30, 40 };
+FIS_TYPE fis_gMFI0Coeff3[] = { 30, 40, 50, 55 };
+FIS_TYPE fis_gMFI0Coeff4[] = { 50, 60, 70, 99999999 };
 FIS_TYPE* fis_gMFI0Coeff[] = { fis_gMFI0Coeff1, fis_gMFI0Coeff2, fis_gMFI0Coeff3, fis_gMFI0Coeff4 };
 FIS_TYPE** fis_gMFICoeff[] = { fis_gMFI0Coeff };
 
@@ -296,7 +329,7 @@ int* fis_gRO[] = { fis_gRO0, fis_gRO1, fis_gRO2, fis_gRO3 };
 FIS_TYPE fis_gIMin[] = { 0 };
 
 // Input range Max
-FIS_TYPE fis_gIMax[] = { 60 };
+FIS_TYPE fis_gIMax[] = { 40 };
 
 // Output range Min
 FIS_TYPE fis_gOMin[] = { 0, 0 };
@@ -304,9 +337,9 @@ FIS_TYPE fis_gOMin[] = { 0, 0 };
 // Output range Max
 FIS_TYPE fis_gOMax[] = { 1.3, 1.3 };
 
-//***********************************************************************
+//*************************
 // Data dependent support functions for Fuzzy Inference System
-//***********************************************************************
+//*************************
 FIS_TYPE fis_MF_out(FIS_TYPE** fuzzyRuleSet, FIS_TYPE x, int o) {
   FIS_TYPE mfOut;
   int r;
@@ -346,9 +379,9 @@ FIS_TYPE fis_defuzz_centroid(FIS_TYPE** fuzzyRuleSet, int o) {
   return ((area == 0) ? ((fis_gOMax[o] + fis_gOMin[o]) / 2) : (momentum / area));
 }
 
-//***********************************************************************
+//*************************
 // Fuzzy Inference System
-//***********************************************************************
+//*************************
 void fis_evaluate() {
   FIS_TYPE fuzzyInput0[] = { 0, 0, 0, 0 };
   FIS_TYPE* fuzzyInput[fis_gcI] = {
